@@ -1,6 +1,7 @@
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IAgentRuntimeService, inspectAgentRuntime } from '#/agent/runtimeBinding/agentRuntime';
 import { ISessionMediaStore } from '#/agent/media/sessionMediaStore';
+import { IAgentProfileService } from '#/agent/profile/profile';
 import { isDaemonFileUrl } from '#/agent/media/mediaRef';
 import { attachmentFileSource, runtimeFileSource, withAttachmentLocation, type FileReadSource } from '#/agent/tools/fileReadSource';
 import { RuntimeWorkspaceView } from '#/runtime/runtimeWorkspaceView';
@@ -77,7 +78,9 @@ function stripTrailingLf(line: string): string {
 }
 
 function splitsSurrogatePair(text: string, offset: number): boolean {
+  // oxlint-disable-next-line unicorn/prefer-code-point -- raw UTF-16 halves are the point here
   const previous = text.charCodeAt(offset - 1);
+  // oxlint-disable-next-line unicorn/prefer-code-point -- raw UTF-16 halves are the point here
   const next = text.charCodeAt(offset);
   return previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
 }
@@ -178,6 +181,7 @@ export class ReadTool implements IReadTool {
     @ISessionSkillCatalog private readonly skillCatalog: ISessionSkillCatalog,
     @IAgentToolResultTruncationService private readonly resultTruncation: IAgentToolResultTruncationService,
     @IConfigService private readonly config: IConfigService,
+    @IAgentProfileService private readonly profile: IAgentProfileService,
     @ISessionMediaStore private readonly attachmentStore?: ISessionMediaStore,
   ) {}
 
@@ -275,9 +279,19 @@ export class ReadTool implements IReadTool {
       const header = await source.readBytes(MEDIA_SNIFF_BYTES);
       const fileType = detectFileType(source.name, header);
       if (fileType.kind === 'image' || fileType.kind === 'video') {
+        const kind = fileType.kind;
+        const article = kind === 'image' ? 'an' : 'a';
+        const capabilities = this.profile.getModelCapabilities();
+        const supported = kind === 'image' ? capabilities.image_in : capabilities.video_in;
+        if (!supported) {
+          return {
+            isError: true,
+            output: `"${args.path}" is ${article} ${kind} file. The current model does not support ${kind} input (missing ${kind}_in capability), so this agent cannot view it. Only text files can be read.`,
+          };
+        }
         return {
           isError: true,
-          output: `"${args.path}" is ${fileType.kind === 'image' ? 'an' : 'a'} ${fileType.kind} file. Only text files can be read.`,
+          output: `"${args.path}" is ${article} ${kind} file. Only text files can be read; use ReadMediaFile for image and video files.`,
         };
       }
 
